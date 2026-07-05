@@ -1,112 +1,308 @@
-# linecrawl Phase 1
+# linecrawl
 
-`linecrawl` is a local CLI for LINE Desktop "Save chat" text exports.
+`linecrawl` は、LINE のトーク履歴を自分のパソコンに保存して、あとから検索できるようにするコマンドラインツールです。
 
-It does not read LINE's encrypted `.edb` database yet. Phase 1 imports the text
-files created by LINE's `Save chat` menu, stores them in SQLite, and provides
-discrawl-like search and message commands.
+できることは主に3つです。
 
-## Disclaimer
+- LINE Desktop の「トークを保存」で出したテキストを取り込む
+- Chrome の LINE Web 拡張で開いているトークを取り込む
+- 取り込んだメッセージや画像・スタンプを検索する
 
-This is an independent, unofficial personal project. It is **not affiliated
-with, endorsed by, or connected to** LINE Corporation, LY Corporation, NAVER,
-or any of their subsidiaries. "LINE" and related marks belong to their
-respective owners and are used here only to describe interoperability.
+LINE のパスワードやログイン情報は保存しません。保存先は自分のパソコン内のデータベースと画像フォルダだけです。
 
-- **Your data, your responsibility.** `linecrawl` operates only on chat data
-  you already own and can already read on your own machine. You are responsible
-  for handling that data — and any other person's messages contained in it — in
-  accordance with applicable privacy laws and LINE's Terms of Service.
-- **Local only.** The tool reads local LINE exports / the DOM of your own
-  logged-in LINE session and writes to a local SQLite database. It does not send
-  your data to any remote server. The only network call it makes is to a local
-  Chrome DevTools endpoint (`http://127.0.0.1:9222`) that you opt into.
-- **Automation and reverse-engineering caveats.** The Web route automates the
-  LINE Chrome extension's DOM, and the Phase 2 notes describe probing LINE's
-  local encrypted storage. These are best-effort, may break at any time, and may
-  be contrary to a service's Terms of Service in some contexts. Use them only
-  where you are permitted to, and at your own risk.
-- **No warranty.** This software is provided "as is", without warranty of any
-  kind. See [LICENSE](LICENSE). The authors are not liable for any data loss,
-  account action, or other damage arising from its use.
+## まずやること
 
-## Usage
+インストールしたら、まずこの2つを実行してください。
 
 ```bash
-linecrawl import-downloads
-linecrawl desktop-save-current --import
-linecrawl desktop-save-current --menu-already-open --pre-click-delay 5 --import
-linecrawl web-import-current --scroll-steps 5
-linecrawl web-watch-current --interval 30 --scroll-steps 1
-linecrawl launchd-install-web --interval 30 --scroll-steps 1
-linecrawl web-import-current --method cdp --chrome-debug-url http://127.0.0.1:9222
-linecrawl web-dump-current --with-media --output ~/Downloads/line-web-dump.json
-linecrawl web-import-json ~/Downloads/line-web-dump.json
-linecrawl web-doctor
-linecrawl --json doctor
-linecrawl stats
-linecrawl chats
-linecrawl search "相談"
-linecrawl messages --chat "%Podcast%" --limit 20
-linecrawl media --chat "%Podcast%" --limit 10
-linecrawl sql "select count(*) as messages from messages;" --json
-linecrawl watch
-linecrawl launchd-install --interval 10 --verbose
-linecrawl launchd-status
-linecrawl edb-doctor
-linecrawl edb-import --dry-run
+linecrawl --help
+linecrawl --json doctor --explain
 ```
 
-By default the database is:
+`doctor` は、保存先、メッセージ件数、画像の保存状況、自動取り込みの状態を確認するコマンドです。
 
-```text
-~/.linecrawl/linecrawl.db
-```
-
-You can use another DB for testing:
-
-```bash
-linecrawl --db ./linecrawl.test.db import-downloads
-```
-
-## Install
-
-The source project lives at:
-
-```text
-~/src/linecrawl
-```
-
-Install the command on PATH:
-
-```bash
-cd ~/src/linecrawl
-make install-local
-```
-
-This creates:
-
-```text
-~/.local/bin/linecrawl -> ~/src/linecrawl/linecrawl.py
-```
-
-No auth or network access is required. `linecrawl` only reads local LINE
-exports and writes the local SQLite database.
-
-## JSON Policy
-
-Use global `--json` before the subcommand:
+`--json` はサブコマンドの前に置きます。
 
 ```bash
 linecrawl --json doctor
-linecrawl --json import ~/Downloads/'[LINE]Example.txt'
 linecrawl --json search "相談"
 ```
 
-Successful JSON commands return an object with `ok: true` plus command-specific
-keys such as `results`, `messages`, `chats`, or `stats`.
+いつもの保存先を汚さず試したいときは、一時的な保存先を使います。
 
-Error JSON returns:
+```bash
+linecrawl --db /tmp/linecrawl-test.db --json doctor --explain
+```
+
+## インストール
+
+```bash
+git clone https://github.com/KaishuShito/linecrawl.git
+cd linecrawl
+make install-local
+```
+
+これで `linecrawl` コマンドが使えるようになります。
+
+```bash
+command -v linecrawl
+linecrawl --help
+```
+
+## どの方法で取り込むか
+
+目的に合わせて選びます。
+
+- テキストだけでよい: LINE Desktop の「トークを保存」
+- 画像やスタンプもほしい: Chrome の LINE Web 拡張
+- すでに保存した LINE Web のJSONファイルを使いたい: `web-import-json`
+- LINE の `.edb` ファイルを調べたい: 実験用。ふつうは使いません。
+
+標準の保存先はここです。
+
+```text
+~/.linecrawl/linecrawl.db
+~/.linecrawl/media/
+```
+
+## LINE Desktop から取り込む
+
+テキストだけでよい場合は、この方法が一番シンプルです。
+
+LINE Desktop で対象トークを開いてから実行します。
+
+```bash
+linecrawl desktop-save-current --import
+```
+
+うまくいかないときは、まずクリック位置だけ確認します。
+
+```bash
+linecrawl desktop-save-current --dry-run
+```
+
+すでに `[LINE]...txt` を保存してある場合は、Downloads からまとめて取り込めます。
+
+```bash
+linecrawl --json import-downloads
+```
+
+ファイルを指定して取り込むこともできます。
+
+```bash
+linecrawl --json import ~/Downloads/'[LINE]Family.txt'
+```
+
+## LINE Web から取り込む
+
+画像やスタンプも取り込みたい場合は、LINE Web を使います。
+
+1. Chrome で LINE Web 拡張を開く
+2. 取り込みたいトークを開く
+3. まず診断する
+
+```bash
+linecrawl --json web-doctor
+```
+
+問題なければ取り込みます。
+
+```bash
+linecrawl --json web-import-current --scroll-steps 5
+```
+
+画像・スタンプは標準で保存されます。画像がいらない場合:
+
+```bash
+linecrawl --json web-import-current --no-media
+```
+
+高解像度の画像がほしい場合だけ、`--full-media` を使います。
+
+```bash
+linecrawl --json web-import-current --method cdp --full-media
+```
+
+`--full-media` は、LINE Web の画像ビューアをページ内で一瞬開いて画像を保存します。ふつうの取り込みでは不要です。
+
+## 最近の内容を取り込む
+
+最近のLINE内容を調べる前に、まず状態を見ます。
+
+```bash
+linecrawl --json doctor --explain
+```
+
+LINE Web の状態を見る:
+
+```bash
+linecrawl --json web-doctor
+```
+
+いま開いている LINE Web トークを取り込む:
+
+```bash
+linecrawl --json web-import-current --scroll-steps 5 --force
+```
+
+Downloads にある Save Chat ファイルを取り込む:
+
+```bash
+linecrawl --json import-downloads
+```
+
+`locked` や `busy` と出たら、別の `linecrawl` が動いていないか確認します。
+
+```bash
+pgrep -af linecrawl
+```
+
+## 検索する
+
+よく使う流れです。
+
+1. まず `doctor` で状態を見る
+2. 必要なら取り込む
+3. `search` で探す
+4. `messages` で前後を見る
+5. 画像は `media` で見る
+
+よく使うコマンド:
+
+```bash
+linecrawl --json search "相談"
+linecrawl --json messages --chat "%Family%" --days 7 --limit 30
+linecrawl --json media --chat "%Family%" --limit 10
+linecrawl chats
+```
+
+画像・スタンプの最近分:
+
+```bash
+linecrawl --json media --limit 10
+```
+
+## 自動取り込み
+
+ずっと取り込み続けたい場合だけ、自動取り込みを使います。
+
+LINE Desktop の Save Chat ファイルを見張る:
+
+```bash
+linecrawl launchd-install --interval 10 --verbose
+linecrawl launchd-status --label com.linecrawl.watch
+linecrawl launchd-uninstall --label com.linecrawl.watch
+```
+
+LINE Web の開いているトークを見張る:
+
+```bash
+linecrawl launchd-install-web --interval 30 --scroll-steps 1
+linecrawl launchd-status --label com.linecrawl.webwatch
+linecrawl launchd-uninstall --label com.linecrawl.webwatch
+```
+
+LINE Web の自動取り込みは、Chrome で今開いているトークだけを取り込みます。別のトークを取り込みたい場合は、人間が Chrome でそのトークを開いてください。
+
+一度だけ試す場合:
+
+```bash
+linecrawl web-watch-current --once --verbose
+linecrawl watch --interval 10 --verbose
+```
+
+## LINE Web を使うときの注意
+
+LINE Web 取り込みは、すでにログインしている Chrome を使います。`linecrawl` が LINE のパスワードやトークンを保存することはありません。
+
+使える方法は主に2つです。
+
+- CDP: Chrome を `--remote-debugging-port=9222` で起動する方法
+- AppleScript: Chrome の `Allow JavaScript from Apple Events` を使う方法
+
+CDP を使う場合:
+
+```bash
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222
+```
+
+Chrome 136+ では、いつもの Chrome プロファイルで CDP が使えないことがあります。その場合は AppleScript を使うか、専用プロファイルで Chrome を起動してください。
+
+AppleScript を使う場合は、Chrome でこれを有効にします。
+
+```text
+Chrome > View > Developer > Allow JavaScript from Apple Events
+```
+
+ふつうの LINE Web 取り込みでは、OS のマウス移動、キーボード入力、タブ切り替え、ウィンドウ移動はしません。
+
+## 画像・スタンプ
+
+LINE Web 取り込みでは、表示中の画像・スタンプを標準で保存します。
+
+```bash
+linecrawl --json web-import-current --scroll-steps 5
+linecrawl --json media --limit 10
+```
+
+画像を保存しない:
+
+```bash
+linecrawl --json web-import-current --no-media
+```
+
+高解像度で保存する:
+
+```bash
+linecrawl --json web-import-current --method cdp --full-media
+```
+
+保存先はここです。
+
+```text
+~/.linecrawl/media/<chat>/<sha>.<ext>
+```
+
+メッセージと画像を一緒に見る:
+
+```bash
+linecrawl --json messages --chat "%Family%" --limit 10
+```
+
+画像まわりの状態を見る:
+
+```bash
+linecrawl --json doctor --explain
+```
+
+よく見る項目:
+
+- `media`: 保存した画像・スタンプの数
+- `media_full`: 高解像度で保存した数
+- `media_dir`: 画像の保存先
+- `media_files_missing`: 保存先には記録があるが、画像ファイルが見つからない数
+
+## 機械で読みやすい出力(JSON)
+
+自動処理では `--json` を使います。
+
+```bash
+linecrawl --json doctor
+linecrawl --json search "相談"
+linecrawl --json messages --limit 20
+```
+
+成功時は `ok: true` が返ります。
+
+```json
+{
+  "ok": true,
+  "messages": []
+}
+```
+
+失敗時は `ok: false` と `error` が返ります。
 
 ```json
 {
@@ -118,265 +314,65 @@ Error JSON returns:
 }
 ```
 
-## Imported Format
+## 詳しく調べる(SQL)
 
-The parser expects LINE Desktop text exports like:
+件数や日付範囲を正確に見たいときは `sql` を使います。
 
-```text
-2026.01.06 Tuesday
-17:57 Sender Photos
-17:58 Sender Multi-line message
-continues here
-```
-
-Message IDs are stable hashes of chat, timestamp, sender, content, and source
-line. Re-running `import-downloads` skips unchanged files.
-
-## Commands
-
-- `import <paths...>`: import one or more LINE text exports.
-- `import-downloads`: import `~/Downloads/[LINE]*.txt`.
-- `desktop-save-current`: use the LINE Desktop UI to run Save chat for the currently open chat, then optionally import the newly saved export.
-- `web-dump-current`: use the logged-in LINE Web tab in Google Chrome to dump currently visible chat DOM messages as JSON.
-- `web-import-current`: dump the open LINE Web Chrome tab and import the normalized messages into the same SQLite tables.
-- `web-import-json`: import a saved `web-dump-current` JSON payload. This is useful for debugging extraction without touching Chrome again.
-- `web-watch-current`: poll the open LINE Web tab and import changed DOM dumps.
-- `web-doctor`: check LINE Web tab discovery, CDP availability, AppleScript JavaScript permission, and extension local storage paths.
-- `media`: list captured media files with absolute local paths.
-- `watch`: poll Downloads and import new or changed exports.
-- `launchd-install`: install `watch` as a macOS LaunchAgent.
-- `launchd-install-web`: install `web-watch-current` (with image capture) as a macOS LaunchAgent.
-- `launchd-status`: show the LaunchAgent status and log paths.
-- `launchd-uninstall`: remove the LaunchAgent.
-- `edb-doctor`: inspect LINE Desktop `.edb` files without decrypting them.
-- `edb-import`: snapshot `.edb` files and import them only when they are readable SQLite files with a supported message-shaped schema.
-- `doctor`: show database status.
-- `stats`: show aggregate database statistics.
-- `chats`: list chats, counts, and date spans.
-- `search <query>`: full-text search, falling back to `LIKE` for Japanese text.
-- `messages`: print messages, optionally filtered by chat and days.
-- `sql <query>`: run a read-only SQLite query against the database (the
-  connection is opened read-only, so this command cannot mutate your data).
-
-## LaunchAgent
-
-The default LaunchAgent label is:
-
-```text
-com.linecrawl.watch
-```
-
-It watches:
-
-```text
-~/Downloads/[LINE]*.txt
-```
-
-Logs are written to:
-
-```text
-~/.linecrawl/logs/watch.out.log
-~/.linecrawl/logs/watch.err.log
-```
-
-To remove the watcher:
+`sql` は読み取り専用です。保存先を書き換えるSQLは実行できません。
 
 ```bash
-linecrawl launchd-uninstall
+linecrawl sql "select count(*) as messages from messages;" --json
+linecrawl sql "select name from chats order by name;"
+linecrawl sql "select path, quality from media order by captured_at desc limit 5;" --json
 ```
 
-## LINE Web Import
+## `.edb` について
 
-`web-import-current` is the Chrome-session route for chats that are visible in
-the LINE Chrome extension:
+LINE Desktop の `.edb` 直接取り込みは実験中です。ふつうは Save Chat か LINE Web を使ってください。
+
+診断だけする:
 
 ```bash
-linecrawl web-import-current --scroll-steps 5
+linecrawl --json edb-doctor
 ```
 
-It intentionally borrows the user's already logged-in Chrome session instead of
-extracting LINE credentials. By default it first tries Chrome DevTools Protocol
-at `http://127.0.0.1:9222`, then falls back to AppleScript.
-
-The Web route is passive: it does not activate Chrome, move windows, switch
-tabs, click, type, or scroll the user's visible UI through macOS automation.
-Commands that perform visible UI automation are limited to the explicit
-`desktop-save-current` Save Chat route.
-
-For the CDP path, launch Chrome with remote debugging enabled:
+書き込まずに試す:
 
 ```bash
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+linecrawl --json edb-import --dry-run
 ```
 
-Note: Chrome 136+ refuses `--remote-debugging-port` on the default user profile
-(the port answers but every DevTools endpoint returns 404). If you see that,
-either enable the AppleScript route (`View > Developer > Allow JavaScript from
-Apple Events`) or run a dedicated debugging profile with `--user-data-dir` that
-is logged into the LINE extension.
+`unsupported-encrypted-or-wrapped` が返る場合があります。これは、LINE の `.edb` が暗号化または独自形式で保存されているという意味で、現時点では正常です。
 
-For the AppleScript fallback, Chrome must allow AppleScript JavaScript execution:
+## 安全に使うために
 
-```text
-Chrome menu > View > Developer > Allow JavaScript from Apple Events
-```
+`linecrawl` は LINE 公式ツールではありません。LINE Corporation、LY Corporation、NAVER とは関係ありません。
 
-The importer reads the open `chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc`
-LINE tab, normalizes visible bubbles into the same message shape used by Save
-Chat and EDB imports, and updates the same FTS index. Re-runs are idempotent
-when the DOM dump has not changed. Changed dumps for the same chat URL are kept
-as separate sources so older visible messages are not deleted when a later dump
-contains a different viewport.
+- 自分が読めるトークだけを扱ってください。
+- 他人のメッセージを含むデータは慎重に扱ってください。
+- LINE の利用規約や法律に従ってください。
+- LINE Web や `.edb` まわりは、LINE 側の変更で動かなくなることがあります。
+- このソフトウェアは無保証です。詳しくは [LICENSE](LICENSE) を見てください。
 
-For lightweight automatic capture while a LINE Web chat is open:
+## 開発するとき
+
+このリポジトリを変更したら、テストを実行します。
 
 ```bash
-linecrawl web-watch-current --interval 30 --scroll-steps 1
-```
-
-To keep it running across logins as a LaunchAgent
-(label `com.linecrawl.webwatch`, logs in `~/.linecrawl/logs/webwatch.*.log`):
-
-```bash
-linecrawl launchd-install-web --interval 30 --scroll-steps 1
-linecrawl launchd-status --label com.linecrawl.webwatch
-linecrawl launchd-uninstall --label com.linecrawl.webwatch
-```
-
-For inspection or test fixtures:
-
-```bash
-linecrawl web-doctor
-linecrawl web-dump-current --scroll-steps 5 --output ~/Downloads/line-web-dump.json
-linecrawl web-import-json ~/Downloads/line-web-dump.json
-```
-
-## Image Capture (Web route)
-
-The web commands (`web-import-current`, `web-watch-current`, and
-`launchd-install-web`) capture message images by default; pass `--no-media` to
-disable. `web-dump-current` needs an explicit `--with-media`.
-
-How it works, still fully passive (no tab switching, clicking, or visible
-scrolling):
-
-1. The DOM dump collects visible `img` elements in the message pane (48px+ so
-   avatars are skipped) alongside text bubbles.
-2. Image bytes are read in-page: on CDP via `fetch(blobUrl)` +
-   `FileReader` (with a canvas fallback), on AppleScript via a synchronous
-   canvas re-encode. Results are cached in the page per blob URL, so watch
-   polls do not refetch unchanged images.
-3. Decoded images are stored under `~/.linecrawl/media/<chat>/<sha>.<ext>`,
-   deduplicated by content SHA-256. Blob URLs change every Chrome session, but
-   the same image bytes always map to the same file and the same `[Photo]`
-   message id, so re-dumps never duplicate photos.
-4. The `media` table links each file to its chat and message. `messages --json`
-   returns a `media` array with absolute local paths, and `media` lists recent
-   captures:
-
-```bash
-linecrawl --json messages --chat "%現場%" --limit 10
-linecrawl --json media --chat "%現場%" --limit 10
-```
-
-By default captured images are the thumbnails LINE renders in the DOM.
-
-`--json doctor` reports the pipeline health: `media` (count), `media_full`,
-`media_dir`, `media_latest_captured`, `media_files_missing`,
-`web_watch_running`, and LaunchAgent load state for both watchers.
-
-### Full-resolution capture (`--full-media`)
-
-`web-import-current`, `web-watch-current`, `web-dump-current`, and
-`launchd-install-web` accept an opt-in `--full-media` flag:
-
-```bash
-linecrawl --json web-import-current --full-media
-```
-
-For each visible image it clicks the thumbnail **inside the page** (JavaScript
-`element.click()`, CDP only), waits for the photo viewer's full-resolution
-image to load, captures its bytes, then closes the viewer with synthesized
-Escape/close-button events — one image at a time.
-
-This is an explicit exception to the passive policy, like
-`desktop-save-current`: it never moves the OS mouse, types, switches tabs, or
-focuses Chrome, but the photo viewer briefly opens and closes inside the LINE
-tab. If that tab is in the background nothing visible changes on screen; if
-you are looking at the tab you will see the viewer flash. If a viewer fails to
-close, remaining captures are skipped and the error is reported as
-`full_media_error`.
-
-Quality upgrades happen in place: the `[Photo]` message and `media` row are
-keyed by the thumbnail's content hash, so re-importing with `--full-media`
-replaces the stored thumbnail file with the full-resolution bytes
-(`media.quality` becomes `full`) without duplicating messages or files. A
-later thumbnail-only import never downgrades a stored full-resolution capture.
-
-The AppleScript route cannot run this flow (no async viewer polling); it
-reports `full_media_error` and keeps thumbnails.
-
-This route is DOM-based and should be treated as best-effort when LINE changes
-its extension markup. The Save Chat route remains the conservative fallback.
-
-The Codex Chrome plugin can discover the user's LINE extension tab, but direct
-automation of `chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/...` pages may
-be blocked by the browser automation URL policy. In that case use `web-doctor`
-and prefer the CDP or AppleScript routes above rather than trying to bypass the
-policy.
-
-## Phase 2 EDB Probe
-
-The Phase 2 investigation notes are in:
-
-```text
-PHASE2_EDB_REPORT.md
-```
-
-Current finding: LINE's `.edb` files are encrypted or wrapped, not plain SQLite.
-The likely chat DB is `qweXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX.edb`, but direct import
-needs the LINE StorageService key path and page format.
-
-`edb-import` implements the safe bridge surface for Phase 2. It copies the
-target `.edb` family (`.edb`, `-wal`, and `-shm`) into
-`~/.linecrawl/edb_snapshots/`, opens the snapshot read-only, and refuses to
-write to the linecrawl database unless it finds a table with message content and
-timestamp columns. On the current encrypted LINE files it should report
-`unsupported-encrypted-or-wrapped`; that is expected until the StorageService
-format is decoded.
-
-If Phase 2 succeeds, the goal is not to replace the current text-export path.
-The goal is to add a future import bridge:
-
-```text
-LINE local .edb data
-  -> safe read/extract layer
-  -> normalize into the same message shape as Save chat exports
-  -> import into ~/.linecrawl/linecrawl.db
-  -> use the same chats/search/messages/sql commands
-```
-
-In other words, the CLI should keep one user-facing interface while supporting
-two input routes: the already-working `Save chat` text route, and a carefully
-validated direct local database route if it becomes feasible.
-
-## Test
-
-Run the fixture-backed suite:
-
-```bash
-cd ~/src/linecrawl
 make test
+python3 -m unittest discover -s tests -v
+linecrawl --help
+linecrawl --json doctor --explain
 ```
 
-Smoke test the installed command from another directory:
+インストール済みの `linecrawl` に新しい機能が見えない場合は、先にローカルの `linecrawl.py` を直接実行して確認してください。
 
 ```bash
-cd /tmp
-linecrawl --help
-linecrawl --json doctor
+python3 linecrawl.py --help
 ```
 
-## License
+help を変えたときは、全サブコマンドの `--help` がエラーなく表示されることも確認してください。
+
+## ライセンス
 
 MIT — see [LICENSE](LICENSE).

@@ -37,6 +37,7 @@ DEFAULT_LINE_DATA = (
 DEFAULT_EDB_SNAPSHOT_ROOT = Path.home() / ".linecrawl" / "edb_snapshots"
 DEFAULT_CHROME_DEBUG_URL = "http://127.0.0.1:9222"
 DEFAULT_WEB_LABEL = "com.linecrawl.webwatch"
+HELP_FORMATTER = argparse.RawDescriptionHelpFormatter
 MEDIA_EXTENSIONS = {
     "image/jpeg": ".jpg",
     "image/jpg": ".jpg",
@@ -51,6 +52,62 @@ DATE_RE = re.compile(r"^(\d{4})\.(\d{2})\.(\d{2})\s+(.+)$")
 MSG_RE = re.compile(r"^(\d{1,2}):(\d{2})\s+(.+?)(?:\s+(.*))?$")
 WEB_LINE_URL_PREFIX = "chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/index.html"
 TIME_RE = re.compile(r"\b(\d{1,2}):(\d{2})\s*(AM|PM)?\b", re.IGNORECASE)
+DOCTOR_FIELD_HELP = {
+    "ok": "True when the local DB could be opened and health checks completed.",
+    "db": "SQLite database path used by this invocation.",
+    "db_exists": "Whether the SQLite database file exists on disk.",
+    "db_parent_writable": "Whether linecrawl can write next to the configured DB.",
+    "auth_required": "Always false; linecrawl does not authenticate to LINE.",
+    "auth_source": "Always not_required; imports use local exports or your logged-in Chrome session.",
+    "offline_mode": "True when checks are local-only and do not call external services.",
+    "chats": "Imported chat count.",
+    "members": "Imported sender/member display-name count.",
+    "messages": "Imported message count.",
+    "sources": "Imported source file or LINE Web DOM dump count.",
+    "latest": "Newest imported message timestamp.",
+    "media": "Captured image/sticker/media file count.",
+    "media_full": "Captured media rows stored at full resolution via --full-media.",
+    "media_dir": "Local directory where captured media files are stored.",
+    "media_latest_captured": "Newest media capture timestamp.",
+    "media_files_missing": "Media DB rows whose local files are missing.",
+    "web_watch_running": "Whether a linecrawl web-watch-current process appears to be running.",
+    "downloads_watch_launchd_loaded": f"Whether LaunchAgent {DEFAULT_LABEL} is loaded.",
+    "web_watch_launchd_loaded": f"Whether LaunchAgent {DEFAULT_WEB_LABEL} is loaded.",
+}
+DOCTOR_GUIDE = {
+    "first_run": [
+        "Run `linecrawl --json doctor --explain` to confirm the DB path and writable storage.",
+        "For LINE Desktop exports, open a chat in LINE Desktop and run `linecrawl desktop-save-current --import`.",
+        "For LINE Web imports, open the LINE Chrome extension chat and run `linecrawl --json web-doctor`.",
+        "Then import visible LINE Web messages with `linecrawl --json web-import-current --scroll-steps 5`.",
+    ],
+    "storage": [
+        f"Messages are stored in SQLite at {DEFAULT_DB} unless --db is set.",
+        "Captured media is stored next to the DB under a media/ directory, or ~/.linecrawl/media for the default DB.",
+        "Use --db /tmp/linecrawl-test.db for smoke tests that should not touch your main archive.",
+    ],
+    "line_web_prerequisites": [
+        "Chrome must already be logged into the LINE extension.",
+        "CDP works when Chrome is launched with --remote-debugging-port=9222.",
+        "AppleScript fallback requires Chrome > View > Developer > Allow JavaScript from Apple Events.",
+        "linecrawl stays local-only by default and rejects non-loopback CDP URLs unless --allow-remote-cdp is set.",
+    ],
+    "media": [
+        "LINE Web imports capture visible images/stickers by default.",
+        "Use --no-media to skip media capture.",
+        "Use --full-media only when you need full-resolution files; it briefly opens the in-page LINE image viewer.",
+    ],
+    "watchers": [
+        "Use web-import-current for one-off imports.",
+        "Use launchd-install-web only when you want ongoing local capture of the currently open LINE Web chat.",
+        f"Check the web watcher with `linecrawl launchd-status --label {DEFAULT_WEB_LABEL}`.",
+    ],
+    "troubleshooting": [
+        "If web-import-current fails, run `linecrawl --json web-doctor` first.",
+        "If an import looks stale, use --force to re-import the current dump.",
+        "If media rows exist but files are missing, inspect media_files_missing and rerun the relevant import.",
+    ],
+}
 
 
 def now_iso():
@@ -2056,6 +2113,52 @@ def launchd_loaded(label):
     return result.returncode == 0
 
 
+def print_doctor_human(counts, explain=False):
+    print("linecrawl doctor")
+    print(f"ok: {counts['ok']}")
+    print()
+    print("database:")
+    print(f"  db: {counts['db']}")
+    print(f"  exists: {counts['db_exists']}")
+    print(f"  parent_writable: {counts['db_parent_writable']}")
+    print(f"  offline_mode: {counts['offline_mode']}")
+    print()
+    print("archive:")
+    print(f"  chats: {counts['chats']}")
+    print(f"  members: {counts['members']}")
+    print(f"  messages: {counts['messages']}")
+    print(f"  sources: {counts['sources']}")
+    print(f"  latest: {counts['latest'] or '(none)'}")
+    print()
+    print("media:")
+    print(f"  captured: {counts['media']}")
+    print(f"  full_resolution: {counts['media_full']}")
+    print(f"  dir: {counts['media_dir']}")
+    print(f"  latest_captured: {counts['media_latest_captured'] or '(none)'}")
+    print(f"  files_missing: {counts['media_files_missing']}")
+    print()
+    print("watchers:")
+    print(f"  downloads_launchd_loaded ({DEFAULT_LABEL}): {counts['downloads_watch_launchd_loaded']}")
+    print(f"  web_launchd_loaded ({DEFAULT_WEB_LABEL}): {counts['web_watch_launchd_loaded']}")
+    print(f"  web_watch_process_running: {counts['web_watch_running']}")
+    print()
+    print("next checks:")
+    print("  LINE Web prerequisites: linecrawl --json web-doctor")
+    print("  Recent LINE Web import: linecrawl --json web-import-current --scroll-steps 5")
+    print("  Captured media paths: linecrawl --json media --limit 10")
+    if explain:
+        print()
+        print("field descriptions:")
+        for key, text in DOCTOR_FIELD_HELP.items():
+            print(f"  {key}: {text}")
+        print()
+        print("setup guide:")
+        for section, steps in DOCTOR_GUIDE.items():
+            print(f"  {section}:")
+            for step in steps:
+                print(f"    - {step}")
+
+
 def cmd_doctor(args):
     conn = connect(args.db)
     db_exists = args.db.exists()
@@ -2084,11 +2187,13 @@ def cmd_doctor(args):
         "downloads_watch_launchd_loaded": launchd_loaded(DEFAULT_LABEL),
         "web_watch_launchd_loaded": launchd_loaded(DEFAULT_WEB_LABEL),
     }
+    if args.explain:
+        counts["explain"] = DOCTOR_FIELD_HELP
+        counts["guide"] = DOCTOR_GUIDE
     if args.json:
         print_json(counts)
     else:
-        for key, value in counts.items():
-            print(f"{key}: {value}")
+        print_doctor_human(counts, explain=args.explain)
     return 0
 
 
@@ -2581,24 +2686,93 @@ def cmd_edb_import(args):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog="linecrawl", description="Local CLI for LINE Save chat exports.")
+    parser = argparse.ArgumentParser(
+        prog="linecrawl",
+        formatter_class=HELP_FORMATTER,
+        description=(
+            "Local CLI for LINE chat history.\n\n"
+            "Imports LINE Desktop Save Chat text exports and visible LINE Web Chrome\n"
+            "extension messages into a local SQLite database. LINE Web imports capture\n"
+            "visible images/stickers by default and can opt into full-resolution image\n"
+            "capture with --full-media. No LINE auth is stored by linecrawl; web imports\n"
+            "reuse your already logged-in local Chrome session."
+        ),
+        epilog=(
+            "Common workflows:\n"
+            "  linecrawl --json doctor\n"
+            "  linecrawl --json web-doctor\n"
+            "  linecrawl --json web-import-current --scroll-steps 5\n"
+            "  linecrawl --json messages --chat '%Alex%' --limit 20\n"
+            "  linecrawl --json media --limit 10\n\n"
+            "Note: --json is a global flag, so put it before the subcommand."
+        ),
+    )
     parser.add_argument("--db", type=Path, default=DEFAULT_DB, help=f"SQLite DB path. Default: {DEFAULT_DB}")
     parser.add_argument("--json", action="store_true", help="Emit stable JSON for commands that support it.")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("import", help="Import LINE Save chat text files.")
-    p.add_argument("paths", nargs="+")
-    p.add_argument("--force", action="store_true")
+    p = sub.add_parser(
+        "import",
+        formatter_class=HELP_FORMATTER,
+        help="Import LINE Desktop Save Chat text files.",
+        description=(
+            "Import one or more LINE Desktop Save Chat text exports into SQLite.\n"
+            "This route is text-only because LINE Desktop exports do not include\n"
+            "image files. Re-running the same file is idempotent."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl --json import ~/Downloads/'[LINE]Family.txt'\n"
+            "  linecrawl --json import ~/Downloads/'[LINE]'*.txt\n"
+            "  linecrawl messages --chat 'Family' --limit 20"
+        ),
+    )
+    p.add_argument("paths", nargs="+", help="LINE Desktop Save Chat .txt export paths.")
+    p.add_argument("--force", action="store_true", help="Re-import even if a source file has not changed.")
     p.set_defaults(func=cmd_import)
 
-    p = sub.add_parser("import-downloads", help="Import ~/Downloads/[LINE]*.txt.")
-    p.add_argument("--downloads", type=Path, default=DEFAULT_DOWNLOADS)
-    p.add_argument("--force", action="store_true")
+    p = sub.add_parser(
+        "import-downloads",
+        formatter_class=HELP_FORMATTER,
+        help="Import ~/Downloads/[LINE]*.txt.",
+        description=(
+            "Scan a Downloads directory for LINE Desktop Save Chat exports matching\n"
+            "[LINE]*.txt and import every matching file. This is the fastest route\n"
+            "after manually choosing Save Chat in LINE Desktop."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl --json import-downloads\n"
+            "  linecrawl --json import-downloads --downloads ~/Downloads\n"
+            "  linecrawl --json import-downloads --force"
+        ),
+    )
+    p.add_argument("--downloads", type=Path, default=DEFAULT_DOWNLOADS, help="Directory to scan. Default: ~/Downloads.")
+    p.add_argument("--force", action="store_true", help="Re-import matching files even if unchanged.")
     p.set_defaults(func=cmd_import_downloads)
 
-    p = sub.add_parser("desktop-save-current", help="Use LINE Desktop UI to Save chat for the currently open chat.")
+    p = sub.add_parser(
+        "desktop-save-current",
+        formatter_class=HELP_FORMATTER,
+        help="Use LINE Desktop UI to Save chat for the currently open chat.",
+        description=(
+            "Automate LINE Desktop's visible Save Chat menu for the currently open\n"
+            "chat, then optionally import the exported text file. This is the only\n"
+            "command that intentionally uses visible macOS UI automation."
+        ),
+        epilog=(
+            "Before running:\n"
+            "  1. Open LINE Desktop and select the chat you want.\n"
+            "  2. Make sure the terminal has macOS Accessibility permission.\n"
+            "  3. Start with --dry-run if window geometry might be wrong.\n\n"
+            "Examples:\n"
+            "  linecrawl desktop-save-current --dry-run\n"
+            "  linecrawl --json desktop-save-current --import\n"
+            "  linecrawl --json desktop-save-current --menu-already-open --pre-click-delay 5 --import"
+        ),
+    )
     p.add_argument("--watch-dir", type=Path, default=DEFAULT_DOWNLOADS, help="Directory where LINE writes Save chat text files. Default: ~/Downloads.")
-    p.add_argument("--timeout", type=float, default=DEFAULT_DESKTOP_SAVE_TIMEOUT)
+    p.add_argument("--timeout", type=float, default=DEFAULT_DESKTOP_SAVE_TIMEOUT, help=f"Seconds to wait for the exported file. Default: {DEFAULT_DESKTOP_SAVE_TIMEOUT:g}.")
     p.add_argument("--import", dest="import_after", action="store_true", help="Import the newly saved export into the linecrawl DB.")
     p.add_argument("--force", action="store_true", help="Re-import the saved file even if unchanged.")
     p.add_argument("--dry-run", action="store_true", help="Only print detected window geometry and planned click points.")
@@ -2611,7 +2785,22 @@ def build_parser():
     p.add_argument("--save-top-offset", type=int, default=414, help="Pixels from LINE window top edge to the Save chat menu item.")
     p.set_defaults(func=cmd_desktop_save_current)
 
-    p = sub.add_parser("web-dump-current", help="Dump visible messages from the open LINE Web Chrome tab.")
+    p = sub.add_parser(
+        "web-dump-current",
+        formatter_class=HELP_FORMATTER,
+        help="Dump visible messages from the open LINE Web Chrome tab.",
+        description=(
+            "Dump the currently open LINE Web Chrome extension chat to JSON without\n"
+            "importing it. Use this for inspection or fixture capture. By default it\n"
+            "collects text only; add --with-media to fetch visible images/stickers."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl web-dump-current --scroll-steps 5 --output /tmp/line-web.json\n"
+            "  linecrawl web-dump-current --with-media --output /tmp/line-web-media.json\n"
+            "  linecrawl web-dump-current --method cdp --full-media --output /tmp/full.json"
+        ),
+    )
     p.add_argument("--scroll-steps", type=int, default=0, help="Scroll upward this many viewports while collecting messages.")
     p.add_argument("--method", choices=("auto", "cdp", "applescript", "ax"), default="auto", help="Chrome control method. Default: auto.")
     p.add_argument("--chrome-debug-url", default=DEFAULT_CHROME_DEBUG_URL, help=f"Chrome DevTools URL for --method cdp. Default: {DEFAULT_CHROME_DEBUG_URL}.")
@@ -2621,7 +2810,27 @@ def build_parser():
     p.add_argument("--full-media", action="store_true", help="Also capture full-resolution images via the in-page viewer (CDP only; briefly opens the photo viewer inside the LINE tab).")
     p.set_defaults(func=cmd_web_dump_current)
 
-    p = sub.add_parser("web-import-current", help="Import messages from the open LINE Web Chrome tab.")
+    p = sub.add_parser(
+        "web-import-current",
+        formatter_class=HELP_FORMATTER,
+        help="Import messages from the open LINE Web Chrome tab.",
+        description=(
+            "Import the currently open LINE Web Chrome extension chat into SQLite.\n"
+            "Image/sticker capture is ON by default; use --no-media to disable it.\n"
+            "The default method is local-only auto detection: CDP first, then\n"
+            "AppleScript/Accessibility fallbacks when available. The command never\n"
+            "switches tabs or types into LINE."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl --json web-doctor\n"
+            "  linecrawl --json web-import-current --scroll-steps 5\n"
+            "  linecrawl --json web-import-current --no-media\n"
+            "  linecrawl --json web-import-current --method cdp --full-media\n\n"
+            "Use --full-media only when you want high-quality image files. It briefly\n"
+            "opens each image viewer inside the LINE tab through in-page JavaScript."
+        ),
+    )
     p.add_argument("--scroll-steps", type=int, default=0, help="Scroll upward this many viewports while collecting messages.")
     p.add_argument("--method", choices=("auto", "cdp", "applescript", "ax"), default="auto", help="Chrome control method. Default: auto.")
     p.add_argument("--chrome-debug-url", default=DEFAULT_CHROME_DEBUG_URL, help=f"Chrome DevTools URL for --method cdp. Default: {DEFAULT_CHROME_DEBUG_URL}.")
@@ -2632,7 +2841,22 @@ def build_parser():
     p.add_argument("--full-media", action="store_true", help="Also capture full-resolution images via the in-page viewer (CDP only; briefly opens the photo viewer inside the LINE tab).")
     p.set_defaults(func=cmd_web_import_current, with_media=True)
 
-    p = sub.add_parser("web-watch-current", help="Poll the open LINE Web Chrome tab and import changed DOM dumps.")
+    p = sub.add_parser(
+        "web-watch-current",
+        formatter_class=HELP_FORMATTER,
+        help="Poll the open LINE Web Chrome tab and import changed DOM dumps.",
+        description=(
+            "Continuously import the currently open LINE Web chat. This watches only\n"
+            "the chat that is open in the LINE Web tab and stores changed DOM dumps\n"
+            "idempotently in the local SQLite database."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl web-watch-current --interval 30 --scroll-steps 1\n"
+            "  linecrawl web-watch-current --once --verbose\n"
+            "  linecrawl web-watch-current --no-media"
+        ),
+    )
     p.add_argument("--interval", type=float, default=30.0, help="Seconds between imports. Default: 30.")
     p.add_argument("--scroll-steps", type=int, default=0, help="Scroll upward this many viewports while collecting messages.")
     p.add_argument("--method", choices=("auto", "cdp", "applescript", "ax"), default="auto", help="Chrome control method. Default: auto.")
@@ -2647,92 +2871,334 @@ def build_parser():
     p.add_argument("--full-media", action="store_true", help="Also capture full-resolution images via the in-page viewer (CDP only; briefly opens the photo viewer inside the LINE tab).")
     p.set_defaults(func=cmd_web_watch_current, with_media=True)
 
-    p = sub.add_parser("web-import-json", help="Import a saved LINE Web DOM dump JSON file.")
-    p.add_argument("path", type=Path)
+    p = sub.add_parser(
+        "web-import-json",
+        formatter_class=HELP_FORMATTER,
+        help="Import a saved LINE Web DOM dump JSON file.",
+        description=(
+            "Import a JSON dump previously produced by web-dump-current. This is useful\n"
+            "for tests, debugging, or reviewing what will be imported before touching\n"
+            "your main archive."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl web-dump-current --with-media --output /tmp/line-web.json\n"
+            "  linecrawl --db /tmp/linecrawl-test.db --json web-import-json /tmp/line-web.json\n"
+            "  linecrawl --json web-import-json ~/Downloads/line-web-dump.json --force"
+        ),
+    )
+    p.add_argument("path", type=Path, help="Path to a JSON dump produced by web-dump-current.")
     p.add_argument("--owner-name", default="Me", help="Sender name to use for outgoing LINE Web messages.")
     p.add_argument("--force", action="store_true", help="Re-import even if the web dump is unchanged.")
     p.set_defaults(func=cmd_web_import_json)
 
-    p = sub.add_parser("web-doctor", help="Check LINE Web Chrome import prerequisites.")
+    p = sub.add_parser(
+        "web-doctor",
+        formatter_class=HELP_FORMATTER,
+        help="Check LINE Web Chrome import prerequisites.",
+        description=(
+            "Check whether linecrawl can see a LINE Web Chrome extension tab and which\n"
+            "local automation routes are available. CDP is preferred when Chrome is\n"
+            "launched with --remote-debugging-port=9222; AppleScript requires Chrome's\n"
+            "'Allow JavaScript from Apple Events' developer-menu setting."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl --json web-doctor\n"
+            "  linecrawl --json web-doctor --chrome-debug-url http://127.0.0.1:9222\n"
+            "  linecrawl --json web-import-current --scroll-steps 5"
+        ),
+    )
     p.add_argument("--chrome-debug-url", default=DEFAULT_CHROME_DEBUG_URL, help=f"Chrome DevTools URL. Default: {DEFAULT_CHROME_DEBUG_URL}.")
     p.add_argument("--allow-remote-cdp", action="store_true", help="Allow a non-loopback Chrome DevTools URL. Off by default so linecrawl stays local-only.")
-    p.add_argument("--chrome-profile-root", default=Path.home() / "Library" / "Application Support" / "Google" / "Chrome" / "Default")
+    p.add_argument(
+        "--chrome-profile-root",
+        default=Path.home() / "Library" / "Application Support" / "Google" / "Chrome" / "Default",
+        help="Chrome profile directory to inspect for LINE extension local storage. Default: Chrome Default profile.",
+    )
     p.set_defaults(func=cmd_web_doctor)
 
-    p = sub.add_parser("web-dump-js", help="Print the LINE Web DOM extraction JavaScript.")
+    p = sub.add_parser(
+        "web-dump-js",
+        formatter_class=HELP_FORMATTER,
+        help="Print the LINE Web DOM extraction JavaScript.",
+        description=(
+            "Print the JavaScript snippet used to read visible LINE Web DOM messages.\n"
+            "Most users do not need this; it is mainly for debugging browser-side\n"
+            "extraction when LINE changes its markup."
+        ),
+        epilog=(
+            "Example:\n"
+            "  linecrawl web-dump-js > /tmp/linecrawl-web-dump.js"
+        ),
+    )
     p.set_defaults(func=cmd_web_dump_js)
 
-    p = sub.add_parser("chats", help="List imported chats.")
+    p = sub.add_parser(
+        "chats",
+        formatter_class=HELP_FORMATTER,
+        help="List imported chats.",
+        description="List chats currently present in the local SQLite archive.",
+        epilog=(
+            "Examples:\n"
+            "  linecrawl chats\n"
+            "  linecrawl --json sql \"select name from chats order by name;\""
+        ),
+    )
     p.set_defaults(func=cmd_chats)
 
-    p = sub.add_parser("search", help="Full-text search messages.")
-    p.add_argument("query")
-    p.add_argument("--chat", help="SQL LIKE pattern, e.g. '%Podcast%'.")
-    p.add_argument("--limit", type=int, default=20)
+    p = sub.add_parser(
+        "search",
+        formatter_class=HELP_FORMATTER,
+        help="Full-text search messages.",
+        description=(
+            "Search imported message content, sender names, and chat names using the\n"
+            "SQLite full-text index. Use --chat to narrow results to a chat-name SQL\n"
+            "LIKE pattern."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl --json search \"相談\"\n"
+            "  linecrawl --json search \"Alex\" --limit 10\n"
+            "  linecrawl --json search \"写真\" --chat '%Family%'"
+        ),
+    )
+    p.add_argument("query", help="Search text.")
+    p.add_argument("--chat", help="SQL LIKE pattern, e.g. '%%Podcast%%'.")
+    p.add_argument("--limit", type=int, default=20, help="Maximum results to return. Default: 20.")
     p.set_defaults(func=cmd_search)
 
-    p = sub.add_parser("messages", help="Print recent messages.")
-    p.add_argument("--chat", help="SQL LIKE pattern.")
-    p.add_argument("--days", type=int)
-    p.add_argument("--limit", type=int, default=50)
+    p = sub.add_parser(
+        "messages",
+        formatter_class=HELP_FORMATTER,
+        help="Print recent messages with linked media paths.",
+        description=(
+            "Print recent imported messages, newest first. JSON output includes a\n"
+            "media array with absolute local paths for linked image/sticker files."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl --json messages --limit 20\n"
+            "  linecrawl --json messages --chat '%Family%' --days 7\n"
+            "  linecrawl messages --chat 'Work' --limit 30"
+        ),
+    )
+    p.add_argument("--chat", help="SQL LIKE pattern, e.g. '%%Work%%' or an exact chat name.")
+    p.add_argument("--days", type=int, help="Only include messages from the last N days.")
+    p.add_argument("--limit", type=int, default=50, help="Maximum messages to return. Default: 50.")
     p.set_defaults(func=cmd_messages)
 
-    p = sub.add_parser("media", help="List captured media files with local paths.")
-    p.add_argument("--chat", help="SQL LIKE pattern.")
-    p.add_argument("--days", type=int)
-    p.add_argument("--limit", type=int, default=20)
+    p = sub.add_parser(
+        "media",
+        formatter_class=HELP_FORMATTER,
+        help="List captured image/sticker files with absolute local paths.",
+        description=(
+            "List media files captured from LINE Web imports. Paths are absolute so\n"
+            "they can be opened directly by tools or copied into reports."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl --json media --limit 10\n"
+            "  linecrawl --json media --chat '%Family%' --days 30\n"
+            "  linecrawl sql \"select path, quality from media order by captured_at desc limit 5;\" --json"
+        ),
+    )
+    p.add_argument("--chat", help="SQL LIKE pattern, e.g. '%%Work%%' or an exact chat name.")
+    p.add_argument("--days", type=int, help="Only include media from the last N days.")
+    p.add_argument("--limit", type=int, default=20, help="Maximum media rows to return. Default: 20.")
     p.set_defaults(func=cmd_media)
 
-    p = sub.add_parser("sql", help="Run a read query against the DB.")
-    p.add_argument("query")
-    p.add_argument("--json", action="store_true")
+    p = sub.add_parser(
+        "sql",
+        formatter_class=HELP_FORMATTER,
+        help="Run a read query against the DB.",
+        description=(
+            "Run a read-only SQLite SELECT/WITH query against the linecrawl DB. Writes\n"
+            "are refused. Use this for precise counts, joins, date ranges, and audits."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl sql \"select count(*) as messages from messages;\" --json\n"
+            "  linecrawl sql \"select name from chats order by name;\"\n"
+            "  linecrawl sql \"select path, quality from media order by captured_at desc limit 5;\" --json"
+        ),
+    )
+    p.add_argument("query", help="Read-only SQL query. Must start with SELECT or WITH.")
+    p.add_argument("--json", action="store_true", help="Emit rows as JSON for this SQL command.")
     p.set_defaults(func=cmd_sql)
 
-    p = sub.add_parser("doctor", help="Show DB status.")
+    p = sub.add_parser(
+        "doctor",
+        formatter_class=HELP_FORMATTER,
+        help="Show DB, media pipeline, and watcher status.",
+        description=(
+            "Show local archive health. The JSON form is stable for automation; the\n"
+            "human form groups database, archive, media pipeline, and watcher checks\n"
+            "with next commands to run."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl doctor\n"
+            "  linecrawl --json doctor\n"
+            "  linecrawl --json doctor --explain"
+        ),
+    )
+    p.add_argument("--explain", action="store_true", help="Include field descriptions. With --json, adds an 'explain' object.")
     p.set_defaults(func=cmd_doctor)
 
-    p = sub.add_parser("stats", help="Show aggregate database statistics.")
+    p = sub.add_parser(
+        "stats",
+        formatter_class=HELP_FORMATTER,
+        help="Show aggregate database statistics.",
+        description="Show counts and date span for the local archive.",
+        epilog=(
+            "Examples:\n"
+            "  linecrawl stats\n"
+            "  linecrawl --json stats"
+        ),
+    )
     p.set_defaults(func=cmd_stats)
 
-    p = sub.add_parser("watch", help="Poll Downloads and import changed LINE exports.")
-    p.add_argument("--downloads", type=Path, default=DEFAULT_DOWNLOADS)
-    p.add_argument("--interval", type=float, default=5.0)
-    p.add_argument("--verbose", action="store_true")
+    p = sub.add_parser(
+        "watch",
+        formatter_class=HELP_FORMATTER,
+        help="Poll Downloads and import changed LINE exports.",
+        description=(
+            "Run a foreground loop that watches a Downloads directory for LINE Desktop\n"
+            "Save Chat exports and imports changed files. This is useful for manual\n"
+            "sessions; use launchd-install for a persistent background watcher."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl watch --interval 10 --verbose\n"
+            "  linecrawl watch --downloads ~/Downloads\n\n"
+            "Stop with Ctrl-C."
+        ),
+    )
+    p.add_argument("--downloads", type=Path, default=DEFAULT_DOWNLOADS, help="Directory to scan for [LINE]*.txt exports. Default: ~/Downloads.")
+    p.add_argument("--interval", type=float, default=5.0, help="Seconds between scans. Default: 5.")
+    p.add_argument("--verbose", action="store_true", help="Print unchanged imports too.")
     p.set_defaults(func=cmd_watch)
 
-    p = sub.add_parser("launchd-install", help="Install the Downloads watcher as a LaunchAgent.")
-    p.add_argument("--downloads", type=Path, default=DEFAULT_DOWNLOADS)
-    p.add_argument("--interval", type=float, default=10.0)
-    p.add_argument("--label", default=DEFAULT_LABEL)
-    p.add_argument("--verbose", action="store_true")
+    p = sub.add_parser(
+        "launchd-install",
+        formatter_class=HELP_FORMATTER,
+        help="Install the Downloads watcher as a LaunchAgent.",
+        description=(
+            "Install a per-user LaunchAgent that watches LINE Desktop Save Chat exports\n"
+            "in Downloads and imports changed files. Use this only when you want\n"
+            "ongoing background import of text exports."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl launchd-install --interval 10 --verbose\n"
+            f"  linecrawl launchd-status --label {DEFAULT_LABEL}\n"
+            f"  linecrawl launchd-uninstall --label {DEFAULT_LABEL}"
+        ),
+    )
+    p.add_argument("--downloads", type=Path, default=DEFAULT_DOWNLOADS, help="Directory to scan for [LINE]*.txt exports. Default: ~/Downloads.")
+    p.add_argument("--interval", type=float, default=10.0, help="Seconds between scans. Default: 10.")
+    p.add_argument("--label", default=DEFAULT_LABEL, help=f"LaunchAgent label. Default: {DEFAULT_LABEL}.")
+    p.add_argument("--verbose", action="store_true", help="Log unchanged imports too.")
     p.set_defaults(func=cmd_launchd_install)
 
-    p = sub.add_parser("launchd-install-web", help="Install the LINE Web tab watcher (with image capture) as a LaunchAgent.")
-    p.add_argument("--interval", type=float, default=30.0)
-    p.add_argument("--scroll-steps", type=int, default=0)
-    p.add_argument("--method", choices=("auto", "cdp", "applescript", "ax"), default="auto")
-    p.add_argument("--chrome-debug-url", default=DEFAULT_CHROME_DEBUG_URL)
-    p.add_argument("--label", default=DEFAULT_WEB_LABEL)
+    p = sub.add_parser(
+        "launchd-install-web",
+        formatter_class=HELP_FORMATTER,
+        help="Install the LINE Web tab watcher (with image capture) as a LaunchAgent.",
+        description=(
+            "Install a per-user LaunchAgent that periodically imports the currently\n"
+            "open LINE Web Chrome tab. Install this only when you want ongoing local\n"
+            "capture; otherwise use web-import-current for one-off imports."
+        ),
+        epilog=(
+            "Examples:\n"
+            f"  linecrawl launchd-install-web --interval 30 --scroll-steps 1\n"
+            f"  linecrawl launchd-status --label {DEFAULT_WEB_LABEL}\n"
+            f"  linecrawl launchd-uninstall --label {DEFAULT_WEB_LABEL}"
+        ),
+    )
+    p.add_argument("--interval", type=float, default=30.0, help="Seconds between imports. Default: 30.")
+    p.add_argument("--scroll-steps", type=int, default=0, help="Scroll upward this many viewports per import. Default: 0.")
+    p.add_argument("--method", choices=("auto", "cdp", "applescript", "ax"), default="auto", help="Chrome control method. Default: auto.")
+    p.add_argument("--chrome-debug-url", default=DEFAULT_CHROME_DEBUG_URL, help=f"Chrome DevTools URL for --method cdp. Default: {DEFAULT_CHROME_DEBUG_URL}.")
+    p.add_argument("--label", default=DEFAULT_WEB_LABEL, help=f"LaunchAgent label. Default: {DEFAULT_WEB_LABEL}.")
     p.add_argument("--no-media", dest="with_media", action="store_false", help="Skip image capture.")
     p.add_argument("--full-media", action="store_true", help="Also capture full-resolution images via the in-page viewer (CDP only; briefly opens the photo viewer inside the LINE tab).")
     p.set_defaults(func=cmd_launchd_install_web, with_media=True)
 
-    p = sub.add_parser("launchd-status", help="Show LaunchAgent status.")
-    p.add_argument("--label", default=DEFAULT_LABEL)
+    p = sub.add_parser(
+        "launchd-status",
+        formatter_class=HELP_FORMATTER,
+        help="Show LaunchAgent status.",
+        description=(
+            "Print launchd status for a linecrawl LaunchAgent label and show the plist\n"
+            "path. Use the web label for LINE Web watcher status."
+        ),
+        epilog=(
+            "Examples:\n"
+            f"  linecrawl launchd-status --label {DEFAULT_LABEL}\n"
+            f"  linecrawl launchd-status --label {DEFAULT_WEB_LABEL}"
+        ),
+    )
+    p.add_argument("--label", default=DEFAULT_LABEL, help=f"LaunchAgent label. Default: {DEFAULT_LABEL}.")
     p.set_defaults(func=cmd_launchd_status)
 
-    p = sub.add_parser("launchd-uninstall", help="Remove the LaunchAgent.")
-    p.add_argument("--label", default=DEFAULT_LABEL)
+    p = sub.add_parser(
+        "launchd-uninstall",
+        formatter_class=HELP_FORMATTER,
+        help="Remove the LaunchAgent.",
+        description=(
+            "Unload and remove a linecrawl LaunchAgent plist. This does not delete the\n"
+            "SQLite DB or media files."
+        ),
+        epilog=(
+            "Examples:\n"
+            f"  linecrawl launchd-uninstall --label {DEFAULT_LABEL}\n"
+            f"  linecrawl launchd-uninstall --label {DEFAULT_WEB_LABEL}"
+        ),
+    )
+    p.add_argument("--label", default=DEFAULT_LABEL, help=f"LaunchAgent label. Default: {DEFAULT_LABEL}.")
     p.set_defaults(func=cmd_launchd_uninstall)
 
-    p = sub.add_parser("edb-doctor", help="Inspect LINE Desktop .edb files without decrypting them.")
-    p.add_argument("--line-data", type=Path, default=DEFAULT_LINE_DATA)
+    p = sub.add_parser(
+        "edb-doctor",
+        formatter_class=HELP_FORMATTER,
+        help="Inspect LINE Desktop .edb files without decrypting them.",
+        description=(
+            "Experimental read-only inspection of LINE Desktop .edb storage locations.\n"
+            "The Save Chat and LINE Web routes are the supported import paths; use EDB\n"
+            "commands only for research."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl --json edb-doctor\n"
+            "  linecrawl edb-doctor --line-data ~/Library/Containers/jp.naver.line.mac/Data"
+        ),
+    )
+    p.add_argument("--line-data", type=Path, default=DEFAULT_LINE_DATA, help="LINE Desktop container data root. Defaults to the standard macOS LINE container path.")
     p.set_defaults(func=cmd_edb_doctor)
 
-    p = sub.add_parser("edb-import", help="Snapshot and import readable LINE .edb message stores when supported.")
+    p = sub.add_parser(
+        "edb-import",
+        formatter_class=HELP_FORMATTER,
+        help="Snapshot and import readable LINE .edb message stores when supported.",
+        description=(
+            "Experimental EDB research route. It snapshots target .edb files before\n"
+            "probing and currently supports only readable/plain message stores. Prefer\n"
+            "Save Chat or LINE Web import for normal use."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl --json edb-import --dry-run\n"
+            "  linecrawl --json edb-import --dry-run --line-data ~/Library/Containers/jp.naver.line.mac/Data\n\n"
+            "Warning: --dry-run still copies the target .edb family into --snapshot-root\n"
+            "so probing never reads LINE's live files directly."
+        ),
+    )
     p.add_argument("paths", nargs="*", help="Specific .edb files. Defaults to *.edb under --line-data/db.")
-    p.add_argument("--line-data", type=Path, default=DEFAULT_LINE_DATA)
-    p.add_argument("--snapshot-root", type=Path, default=DEFAULT_EDB_SNAPSHOT_ROOT)
+    p.add_argument("--line-data", type=Path, default=DEFAULT_LINE_DATA, help="LINE Desktop container data root. Defaults to the standard macOS LINE container path.")
+    p.add_argument("--snapshot-root", type=Path, default=DEFAULT_EDB_SNAPSHOT_ROOT, help=f"Directory for EDB snapshots. Default: {DEFAULT_EDB_SNAPSHOT_ROOT}.")
     p.add_argument("--dry-run", action="store_true", help="Probe and report importable tables without writing the linecrawl DB. Note: this still copies the target .edb family into --snapshot-root and reads the snapshot read-only.")
     p.add_argument("--force", action="store_true", help="Re-import even if the source snapshot hash is unchanged.")
     p.set_defaults(func=cmd_edb_import)

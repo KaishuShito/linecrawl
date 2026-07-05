@@ -80,9 +80,79 @@ class LinecrawlCliTests(unittest.TestCase):
             self.assertTrue(doctor["ok"])
             self.assertFalse(doctor["auth_required"])
             self.assertEqual(doctor["messages"], 4)
+            self.assertNotIn("explain", doctor)
+
+            explained = json.loads(run_cli("--db", str(db), "--json", "doctor", "--explain").stdout)
+            self.assertEqual(explained["messages"], 4)
+            self.assertIn("explain", explained)
+            self.assertIn("media_full", explained["explain"])
+            self.assertIn("guide", explained)
+            self.assertIn("first_run", explained["guide"])
+            self.assertIn("line_web_prerequisites", explained["guide"])
 
             stats = json.loads(run_cli("--db", str(db), "--json", "stats").stdout)
             self.assertEqual(stats["stats"]["messages"], 4)
+
+    def test_help_surfaces_line_web_import_and_doctor_guidance(self):
+        root_help = run_cli("--help").stdout
+        self.assertIn("LINE Web Chrome", root_help)
+        self.assertIn("web-import-current --scroll-steps 5", root_help)
+        self.assertIn("--json is a global flag", root_help)
+
+        web_help = run_cli("web-import-current", "--help").stdout
+        self.assertIn("Image/sticker capture is ON by default", web_help)
+        self.assertIn("--no-media", web_help)
+        self.assertIn("--full-media", web_help)
+        self.assertIn("opens each image viewer", web_help)
+
+        doctor_help = run_cli("doctor", "--help").stdout
+        self.assertIn("media pipeline", doctor_help)
+        self.assertIn("--explain", doctor_help)
+        self.assertIn("linecrawl --json doctor --explain", doctor_help)
+
+        web_doctor_help = run_cli("web-doctor", "--help").stdout
+        self.assertIn("Allow JavaScript from Apple Events", web_doctor_help)
+        self.assertIn("--chrome-profile-root", web_doctor_help)
+
+        launchd_web_help = run_cli("launchd-install-web", "--help").stdout
+        self.assertIn("com.linecrawl.webwatch", launchd_web_help)
+        self.assertIn("ongoing local", launchd_web_help)
+
+    def test_all_subcommand_help_pages_render_without_tracebacks(self):
+        subcommands = [
+            "import",
+            "import-downloads",
+            "desktop-save-current",
+            "web-dump-current",
+            "web-import-current",
+            "web-watch-current",
+            "web-import-json",
+            "web-doctor",
+            "web-dump-js",
+            "chats",
+            "search",
+            "messages",
+            "media",
+            "sql",
+            "doctor",
+            "stats",
+            "watch",
+            "launchd-install",
+            "launchd-install-web",
+            "launchd-status",
+            "launchd-uninstall",
+            "edb-doctor",
+            "edb-import",
+        ]
+        for subcommand in subcommands:
+            with self.subTest(subcommand=subcommand):
+                result = run_cli(subcommand, "--help")
+                self.assertIn("usage: linecrawl", result.stdout)
+                self.assertNotIn("Traceback", result.stdout + result.stderr)
+
+        search_help = run_cli("search", "--help").stdout
+        self.assertIn("'%Podcast%'", search_help)
+        self.assertIn("--chat '%Family%'", search_help)
 
     def test_import_downloads_matches_line_exports(self):
         with tempfile.TemporaryDirectory() as tmp:
