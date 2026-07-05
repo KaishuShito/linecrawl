@@ -1,0 +1,66 @@
+{
+  "ok": true,
+  "source": "line-web-chrome",
+  "url": "chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/index.html#/chats/example-media",
+  "title": "LINE",
+  "chat_name": "ExampleChat",
+  "extracted_at": "2026-07-04T09:00:00.000Z",
+  "media_transport": "cdp",
+  "messages": [
+    {
+      "kind": "date",
+      "date_label": "Today",
+      "top": 100,
+      "left": 720
+    },
+    {
+      "kind": "message",
+      "id": "incoming:9:03 AM:写真を送ります",
+      "direction": "incoming",
+      "time": "9:03 AM",
+      "date_label": "Today",
+      "content": "写真を送ります",
+      "top": 150,
+      "left": 300
+    },
+    {
+      "kind": "image",
+      "id": "image:incoming:blob:chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/11111111-aaaa",
+      "direction": "incoming",
+      "time": "9:04 AM",
+      "date_label": "Today",
+      "src": "blob:chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/11111111-aaaa",
+      "natural_width": 1,
+      "natural_height": 1,
+      "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+      "top": 220,
+      "left": 300
+    },
+    {
+      "kind": "image",
+      "id": "image:outgoing:blob:chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/22222222-bbbb",
+      "direction": "outgoing",
+      "time": "9:10 AM",
+      "date_label": "Today",
+      "src": "blob:chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/22222222-bbbb",
+      "natural_width": 1,
+      "natural_height": 1,
+      "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC",
+      "top": 320,
+      "left": 850
+    },
+    {
+      "kind": "image",
+      "id": "image:incoming:blob:chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/33333333-cccc",
+      "direction": "incoming",
+      "time": "9:12 AM",
+      "date_label": "Today",
+      "src": "blob:chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/33333333-cccc",
+      "natural_width": 640,
+      "natural_height": 480,
+      "media_error": "TypeError: Failed to fetch; Error: image element not available",
+      "top": 420,
+      "left": 300
+    }
+  ]
+}

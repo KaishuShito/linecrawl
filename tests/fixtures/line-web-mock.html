@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>LINE Mock</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; }
+      main { margin-left: 280px; padding: 32px; height: 720px; overflow-y: auto; }
+      .date { text-align: center; color: #777; margin: 16px; }
+      .bubble { max-width: 520px; padding: 14px 18px; margin: 18px 0; border-radius: 12px; }
+      .incoming { background: #eee; margin-right: auto; }
+      .outgoing { background: #b9f49a; margin-left: auto; }
+      .time { color: #777; font-size: 12px; margin-left: 8px; }
+      textarea { position: fixed; bottom: 12px; left: 300px; right: 20px; height: 48px; }
+    </style>
+  </head>
+  <body>
+    <aside>ExampleChat</aside>
+    <main>
+      <div class="date">Today</div>
+      <div class="bubble incoming">こんにちは！さすがですね。 <span class="time">9:03 PM</span></div>
+      <div class="bubble outgoing">ありがとうございます！ <span class="time">10:45 PM</span></div>
+    </main>
+    <textarea aria-label="Enter a message"></textarea>
+  </body>
+</html>

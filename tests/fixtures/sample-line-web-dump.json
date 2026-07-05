@@ -1,0 +1,36 @@
+{
+  "ok": true,
+  "source": "line-web-chrome",
+  "url": "chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/index.html#/chats/example",
+  "title": "LINE",
+  "chat_name": "ExampleChat",
+  "extracted_at": "2026-05-27T14:00:00.000Z",
+  "messages": [
+    {
+      "kind": "date",
+      "date_label": "Today",
+      "top": 100,
+      "left": 720
+    },
+    {
+      "kind": "message",
+      "id": "incoming:9:03 PM:こんにちは！さすがですね。",
+      "direction": "incoming",
+      "time": "9:03 PM",
+      "date_label": "Today",
+      "content": "こんにちは！さすがですね。",
+      "top": 150,
+      "left": 300
+    },
+    {
+      "kind": "message",
+      "id": "outgoing:10:45 PM:ありがとうございます！",
+      "direction": "outgoing",
+      "time": "10:45 PM",
+      "date_label": "Today",
+      "content": "ありがとうございます！",
+      "top": 300,
+      "left": 850
+    }
+  ]
+}

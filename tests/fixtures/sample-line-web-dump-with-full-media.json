@@ -1,0 +1,59 @@
+{
+  "ok": true,
+  "source": "line-web-chrome",
+  "url": "chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/index.html#/chats/example-media",
+  "title": "LINE",
+  "chat_name": "ExampleChat",
+  "extracted_at": "2026-07-04T10:00:00.000Z",
+  "media_transport": "cdp",
+  "full_media_fetched": 1,
+  "messages": [
+    {
+      "kind": "date",
+      "date_label": "Today",
+      "top": 100,
+      "left": 720
+    },
+    {
+      "kind": "message",
+      "id": "incoming:9:03 AM:写真を送ります",
+      "direction": "incoming",
+      "time": "9:03 AM",
+      "date_label": "Today",
+      "content": "写真を送ります",
+      "top": 150,
+      "left": 300
+    },
+    {
+      "kind": "image",
+      "id": "image:incoming:blob:chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/44444444-dddd",
+      "direction": "incoming",
+      "time": "9:04 AM",
+      "date_label": "Today",
+      "src": "blob:chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/44444444-dddd",
+      "natural_width": 1,
+      "natural_height": 1,
+      "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+      "full_data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAD0lEQVR4nGNg+M8AQhAKABvyA/1tVLjHAAAAAElFTkSuQmCC",
+      "full_content_type": "image/png",
+      "full_width": 2,
+      "full_height": 2,
+      "top": 220,
+      "left": 300
+    },
+    {
+      "kind": "image",
+      "id": "image:outgoing:blob:chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/55555555-eeee",
+      "direction": "outgoing",
+      "time": "9:10 AM",
+      "date_label": "Today",
+      "src": "blob:chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc/55555555-eeee",
+      "natural_width": 1,
+      "natural_height": 1,
+      "data": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC",
+      "full_media_error": "full-resolution image did not appear after in-page click",
+      "top": 320,
+      "left": 850
+    }
+  ]
+}
