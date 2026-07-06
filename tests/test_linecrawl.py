@@ -125,6 +125,8 @@ class LinecrawlCliTests(unittest.TestCase):
             "desktop-save-current",
             "web-dump-current",
             "web-import-current",
+            "web-chats",
+            "web-import-all",
             "web-watch-current",
             "web-import-json",
             "web-doctor",
@@ -345,6 +347,161 @@ class LinecrawlCliTests(unittest.TestCase):
             with sqlite3.connect(db) as conn:
                 self.assertEqual(conn.execute("select count(*) from messages").fetchone()[0], 3)
                 self.assertEqual(conn.execute("select count(*) from source_files").fetchone()[0], 2)
+
+
+class LineWebAllChatsTests(unittest.TestCase):
+    """In-process tests for sidebar enumeration and the all-chats crawl.
+
+    Browser JavaScript cannot run here, so these fake line_web_execute_js /
+    line_web_dump and verify the Python orchestration around them.
+    """
+
+    def setUp(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("linecrawl_module", CLI)
+        self.lc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.lc)
+
+    def fake_sidebar_executor(self, total=30, page=12, row_height=71):
+        """Simulate the virtualized sidebar: only rows near the current scroll
+        position are rendered, and the state machine mirrors the browser-side
+        seen-accumulation of LINE_WEB_CHATLIST_JS."""
+        state = {"scroll": 0, "seen": {}, "calls": []}
+        client_height = page * row_height
+        scroll_height = total * row_height
+
+        def executor(js, method="auto", debug_url=None):
+            import re
+
+            mode = re.search(r'__linecrawlChatMode="(\w+)"', js).group(1)
+            state["calls"].append(mode)
+            if mode == "reset":
+                state["seen"] = {}
+            first = state["scroll"] // row_height
+            for i in range(first, min(total, first + page + 2)):
+                mid = f"mid-{i:03d}"
+                state["seen"][mid] = {
+                    "mid": mid,
+                    "name": f"chat {i:03d}",
+                    "unread": 5 if i == 1 else 0,
+                    "order": i * row_height,
+                    "current": i == 0,
+                    "preview": "",
+                }
+            if mode == "scroll":
+                state["scroll"] = min(state["scroll"] + int(client_height * 0.85), scroll_height - client_height)
+            if mode == "restore":
+                state["scroll"] = 0
+            return json.dumps(
+                {
+                    "ok": True,
+                    "current_mid": "mid-000",
+                    "at_bottom": state["scroll"] + client_height >= scroll_height - 4,
+                    "chats": sorted(state["seen"].values(), key=lambda c: c["order"]),
+                }
+            )
+
+        return executor, state
+
+    def test_list_chats_scrolls_virtualized_sidebar_and_restores(self):
+        executor, state = self.fake_sidebar_executor(total=30, page=12)
+        original = self.lc.line_web_execute_js
+        self.lc.line_web_execute_js = executor
+        try:
+            listing = self.lc.line_web_list_chats(method="applescript")
+        finally:
+            self.lc.line_web_execute_js = original
+        self.assertEqual(len(listing["chats"]), 30)
+        self.assertEqual(listing["current_mid"], "mid-000")
+        self.assertEqual(state["calls"][0], "reset")
+        self.assertEqual(state["calls"][-1], "restore")
+        self.assertEqual(state["scroll"], 0)
+
+    def test_web_import_all_skips_unread_and_restores_original_chat(self):
+        import contextlib
+        import io
+
+        opened = []
+
+        def fake_listing(method="auto", debug_url=None, max_scroll_pages=100):
+            return {
+                "ok": True,
+                "current_mid": "mid-current",
+                "chats": [
+                    {"mid": "mid-current", "name": "open chat", "unread": 0, "order": 0, "current": True},
+                    {"mid": "mid-unread", "name": "unread chat", "unread": 7, "order": 71, "current": False},
+                    {"mid": "mid-b", "name": "サイドバー名", "unread": 0, "order": 142, "current": False},
+                ],
+            }
+
+        def fake_open(mid, method="auto", debug_url=None, timeout=8.0, settle=1.0):
+            opened.append(mid)
+
+        def fake_dump(method="auto", debug_url=None, scroll_steps=0, with_media=False, full_media=False):
+            mid = opened[-1]
+            return {
+                "ok": True,
+                "url": f"chrome-extension://x/index.html#/chats/{mid}",
+                "chat_name": "heuristic header",
+                "extracted_at": "2026-07-06T00:00:00Z",
+                "messages": [
+                    {
+                        "kind": "message",
+                        "id": f"incoming:10:00:hello {mid}",
+                        "direction": "incoming",
+                        "time": "10:00",
+                        "date_label": "Today",
+                        "content": f"hello {mid}",
+                        "top": 100,
+                        "left": 300,
+                    }
+                ],
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "linecrawl.db"
+            originals = (
+                self.lc.line_web_list_chats,
+                self.lc.line_web_open_chat,
+                self.lc.line_web_dump,
+                self.lc.resolve_web_method,
+            )
+            self.lc.line_web_list_chats = fake_listing
+            self.lc.line_web_open_chat = fake_open
+            self.lc.line_web_dump = fake_dump
+            self.lc.resolve_web_method = lambda method="auto", debug_url=None: "applescript"
+            stdout = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(stdout):
+                    code = self.lc.main(
+                        ["--db", str(db), "--json", "web-import-all", "--delay", "0", "--no-media"]
+                    )
+            finally:
+                (
+                    self.lc.line_web_list_chats,
+                    self.lc.line_web_open_chat,
+                    self.lc.line_web_dump,
+                    self.lc.resolve_web_method,
+                ) = originals
+
+            self.assertEqual(code, 0)
+            summary = json.loads(stdout.getvalue())
+            self.assertTrue(summary["ok"])
+            self.assertEqual(summary["chats_crawled"], 2)
+            self.assertEqual([c["mid"] for c in summary["skipped_unread"]], ["mid-unread"])
+            # every crawled chat was opened, and the originally open chat was restored last
+            self.assertEqual(opened, ["mid-current", "mid-b", "mid-current"])
+
+            with sqlite3.connect(db) as conn:
+                chat_names = {row[0] for row in conn.execute("select name from chats")}
+                # sidebar names win over the in-page header heuristic
+                self.assertIn("サイドバー名", chat_names)
+                self.assertIn("open chat", chat_names)
+                self.assertNotIn("heuristic header", chat_names)
+                self.assertNotIn("unread chat", chat_names)
+                count = conn.execute("select count(*) from messages").fetchone()[0]
+                self.assertEqual(count, 2)
 
 
 if __name__ == "__main__":

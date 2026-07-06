@@ -612,10 +612,17 @@ LINE_WEB_DUMP_JS = r"""
       seen[row.id] = row;
     }
     if (mode === "scroll" && root) {
-      root.scrollTop = Math.max(0, root.scrollTop - Math.max(300, root.clientHeight * 0.85));
+      // Older messages are upward. LINE's message pane is a column-reverse
+      // flexbox where the bottom is scrollTop 0 and scrolling up goes
+      // negative, so do not clamp at 0 — the browser clamps at the real top
+      // edge. The pane also re-renders on scroll events, not on bare
+      // scrollTop assignment.
+      root.scrollTop = root.scrollTop - Math.max(300, root.clientHeight * 0.85);
+      root.dispatchEvent(new Event("scroll", { bubbles: true }));
     }
     if (mode === "restore" && root && typeof window.__linecrawlOriginalTop === "number") {
       root.scrollTop = window.__linecrawlOriginalTop;
+      root.dispatchEvent(new Event("scroll", { bubbles: true }));
     }
     return JSON.stringify({
       ok: true,
@@ -819,6 +826,95 @@ LINE_WEB_MEDIA_FULL_JS = r"""
     return JSON.stringify({ ok: true, images: results, viewer_stuck: stuck });
   };
   return run();
+})()
+"""
+
+
+LINE_WEB_CHATLIST_JS = r"""
+(() => {
+  const mode = window.__linecrawlChatMode || "collect";
+  const rows = Array.from(document.querySelectorAll("[data-mid]")).filter(el => {
+    // Only chat-list rows carry aria-selected; profile thumbnails and message
+    // bubbles also have data-mid but must not be treated as chats.
+    if (!el.hasAttribute("aria-selected") && !String(el.className).includes("chatlist_item")) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 100 && r.height > 40 && r.height < 140 && r.left < innerWidth * 0.5;
+  });
+  if (!rows.length) {
+    return JSON.stringify({
+      ok: false,
+      error: "No chat-list rows with data-mid are visible; open the Chats tab in LINE Web.",
+    });
+  }
+  let root = rows[0].parentElement;
+  while (root && root !== document.body && root.scrollHeight <= root.clientHeight + 40) {
+    root = root.parentElement;
+  }
+  if (!root || root === document.body) root = rows[0].parentElement;
+  if (mode === "reset" || !window.__linecrawlChatSeen) {
+    window.__linecrawlChatSeen = {};
+    window.__linecrawlChatOriginalTop = root.scrollTop;
+  }
+  const seen = window.__linecrawlChatSeen;
+  const unreadRe = /^\(\d+\+?\)$/;
+  for (const el of rows) {
+    const mid = el.getAttribute("data-mid");
+    if (!mid) continue;
+    const lines = (el.innerText || "").split("\n").map(s => s.trim()).filter(Boolean);
+    const unreadLine = lines.find(t => unreadRe.test(t)) || "";
+    seen[mid] = {
+      mid,
+      name: lines[0] || mid,
+      unread: unreadLine ? parseInt(unreadLine.replace(/[()+]/g, ""), 10) || 0 : 0,
+      order: el.offsetTop,
+      current: el.getAttribute("aria-current") === "true",
+      preview: lines.slice(1).filter(t => !unreadRe.test(t)).join(" | ").slice(0, 120),
+    };
+  }
+  // The sidebar virtualizer re-renders on scroll events, not on bare
+  // scrollTop assignment, so dispatch one explicitly after moving.
+  if (mode === "scroll") {
+    root.scrollTop = Math.min(root.scrollTop + root.clientHeight * 0.85, root.scrollHeight);
+    root.dispatchEvent(new Event("scroll", { bubbles: true }));
+  }
+  if (mode === "restore" && typeof window.__linecrawlChatOriginalTop === "number") {
+    root.scrollTop = window.__linecrawlChatOriginalTop;
+    root.dispatchEvent(new Event("scroll", { bubbles: true }));
+  }
+  const hashMatch = location.hash.match(/#\/chats\/(.+)$/);
+  return JSON.stringify({
+    ok: true,
+    source: "line-web-chatlist",
+    extracted_at: new Date().toISOString(),
+    current_mid: hashMatch ? hashMatch[1] : null,
+    at_bottom: root.scrollTop + root.clientHeight >= root.scrollHeight - 4,
+    list_scroll_height: root.scrollHeight,
+    chats: Object.values(seen).sort((a, b) => a.order - b.order),
+  });
+})()
+"""
+
+
+LINE_WEB_OPEN_CHAT_JS = r"""
+(() => {
+  const mid = window.__linecrawlTargetMid;
+  if (!mid) return JSON.stringify({ ok: false, error: "no target mid" });
+  const want = "#/chats/" + mid;
+  if (location.hash !== want) location.hash = want;
+  return JSON.stringify({ ok: true, hash: location.hash });
+})()
+"""
+
+
+LINE_WEB_CHAT_READY_JS = r"""
+(() => {
+  const mid = window.__linecrawlTargetMid;
+  const current = document.querySelector('[data-mid][aria-current="true"]');
+  return JSON.stringify({
+    ok: true,
+    hash_ok: location.hash === "#/chats/" + mid,
+    current_row_ok: !!(current && current.getAttribute("data-mid") === mid),
+  });
 })()
 """
 
@@ -1308,6 +1404,97 @@ def line_web_dump(method="auto", debug_url=DEFAULT_CHROME_DEBUG_URL, scroll_step
     raise RuntimeError("; ".join(errors) or "No LINE Web import method available.")
 
 
+def line_web_execute_js(js, method="auto", debug_url=DEFAULT_CHROME_DEBUG_URL):
+    """Run JavaScript in the LINE Web tab via CDP or AppleScript.
+
+    The AX route cannot execute JavaScript, so chat-list enumeration and chat
+    switching support only the cdp/applescript methods.
+    """
+    errors = []
+    if method in ("auto", "cdp"):
+        try:
+            tab = cdp_line_tab(debug_url)
+            if not tab:
+                raise RuntimeError(f"No LINE Web tab found in Chrome DevTools at {debug_url}.")
+            return cdp_evaluate(tab["webSocketDebuggerUrl"], js)
+        except Exception as exc:
+            errors.append(f"cdp: {exc}")
+            if method == "cdp":
+                raise
+    if method in ("auto", "applescript"):
+        try:
+            return applescript_execute_line_js(js)
+        except Exception as exc:
+            errors.append(f"applescript: {exc}")
+            if method == "applescript":
+                raise
+    raise RuntimeError("; ".join(errors) or "No LINE Web JavaScript route available.")
+
+
+def resolve_web_method(method="auto", debug_url=DEFAULT_CHROME_DEBUG_URL):
+    """Pin --method auto to cdp or applescript once, so multi-step chat crawls
+    do not re-probe a dead CDP endpoint on every JavaScript call."""
+    if method != "auto":
+        return method
+    try:
+        if cdp_line_tab(debug_url):
+            return "cdp"
+    except Exception:
+        pass
+    return "applescript"
+
+
+def line_web_chatlist_step(mode, method="auto", debug_url=DEFAULT_CHROME_DEBUG_URL):
+    js = f"window.__linecrawlChatMode={json.dumps(mode)}; {LINE_WEB_CHATLIST_JS};"
+    raw = line_web_execute_js(js, method=method, debug_url=debug_url)
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Chrome returned non-JSON chat-list output: {raw[:200]}") from exc
+    if not payload.get("ok"):
+        raise RuntimeError(payload.get("error") or "LINE Web chat-list dump failed.")
+    return payload
+
+
+def line_web_list_chats(method="auto", debug_url=DEFAULT_CHROME_DEBUG_URL, max_scroll_pages=100):
+    """Enumerate every chat in the LINE Web sidebar.
+
+    The sidebar is a virtualized list, so this scrolls it page by page while
+    collecting data-mid rows, then restores the original scroll position.
+    """
+    payload = line_web_chatlist_step("reset", method=method, debug_url=debug_url)
+    for _ in range(max(0, int(max_scroll_pages))):
+        if payload.get("at_bottom"):
+            break
+        payload = line_web_chatlist_step("scroll", method=method, debug_url=debug_url)
+        time.sleep(0.5)
+    final = line_web_chatlist_step("restore", method=method, debug_url=debug_url)
+    return final
+
+
+def line_web_open_chat(mid, method="auto", debug_url=DEFAULT_CHROME_DEBUG_URL, timeout=8.0, settle=1.0):
+    """Open a chat by mid via the LINE Web hash router and wait until it is
+    current. Returns once location.hash and (when rendered) the aria-current
+    sidebar row both point at the target chat."""
+    open_js = f"window.__linecrawlTargetMid={json.dumps(mid)}; {LINE_WEB_OPEN_CHAT_JS};"
+    ready_js = f"window.__linecrawlTargetMid={json.dumps(mid)}; {LINE_WEB_CHAT_READY_JS};"
+    raw = line_web_execute_js(open_js, method=method, debug_url=debug_url)
+    payload = json.loads(raw)
+    if not payload.get("ok"):
+        raise RuntimeError(payload.get("error") or f"Could not open LINE chat {mid}.")
+    deadline = time.monotonic() + max(1.0, timeout)
+    hash_ok = False
+    while time.monotonic() < deadline:
+        state = json.loads(line_web_execute_js(ready_js, method=method, debug_url=debug_url))
+        hash_ok = bool(state.get("hash_ok"))
+        if hash_ok and state.get("current_row_ok"):
+            break
+        time.sleep(0.4)
+    if not hash_ok:
+        raise RuntimeError(f"LINE Web did not navigate to chat {mid} within {timeout:g}s.")
+    time.sleep(max(0.0, settle))
+
+
 def upsert_chat(conn, name):
     chat_id = stable_id("chat", name)
     stamp = now_iso()
@@ -1701,6 +1888,138 @@ def cmd_web_import_json(args):
     else:
         print_table([result], ["status", "messages", "media", "chat", "path"])
     return 0
+
+
+def cmd_web_chats(args):
+    try:
+        method = resolve_web_method(args.method, args.chrome_debug_url)
+        listing = line_web_list_chats(
+            method=method, debug_url=args.chrome_debug_url, max_scroll_pages=args.max_scroll_pages
+        )
+    except Exception as exc:
+        if args.json:
+            print_json({"ok": False, "error": {"code": "web_chats_failed", "message": str(exc)}})
+        else:
+            print(f"web chats failed: {exc}", file=sys.stderr)
+        return 1
+    listing["method"] = method
+    if args.json:
+        print_json({"ok": True, "chats": listing.get("chats") or [], "current_mid": listing.get("current_mid"), "method": method})
+    else:
+        rows = [
+            {
+                "name": chat.get("name"),
+                "unread": chat.get("unread") or 0,
+                "current": "*" if chat.get("current") else "",
+                "mid": chat.get("mid"),
+            }
+            for chat in listing.get("chats") or []
+        ]
+        print_table(rows, ["name", "unread", "current", "mid"])
+        print(f"\n{len(rows)} chats via {method}")
+    return 0
+
+
+def cmd_web_import_all(args):
+    conn = connect(args.db)
+    media_root = media_root_for_db(args.db)
+    try:
+        method = resolve_web_method(args.method, args.chrome_debug_url)
+        listing = line_web_list_chats(
+            method=method, debug_url=args.chrome_debug_url, max_scroll_pages=args.max_scroll_pages
+        )
+    except Exception as exc:
+        if args.json:
+            print_json({"ok": False, "error": {"code": "web_import_all_failed", "message": str(exc)}})
+        else:
+            print(f"web import-all failed: {exc}", file=sys.stderr)
+        return 1
+
+    original_mid = listing.get("current_mid")
+    chats = listing.get("chats") or []
+    if args.chat:
+        needle = args.chat.casefold()
+        chats = [c for c in chats if needle in str(c.get("name") or "").casefold()]
+
+    skipped_unread = []
+    if not args.include_unread:
+        # Opening a chat with unread messages can send read receipts, so skip
+        # those chats unless the user opts in with --include-unread.
+        todo = []
+        for chat in chats:
+            if (chat.get("unread") or 0) > 0 and not chat.get("current"):
+                skipped_unread.append({"mid": chat.get("mid"), "name": chat.get("name"), "unread": chat.get("unread")})
+            else:
+                todo.append(chat)
+        chats = todo
+    if args.limit is not None:
+        chats = chats[: max(0, args.limit)]
+
+    results = []
+    imported = errors = 0
+    try:
+        for position, chat in enumerate(chats, start=1):
+            mid = chat.get("mid")
+            name = chat.get("name") or mid
+            if not args.json:
+                print(f"[{position}/{len(chats)}] {name}", flush=True)
+            try:
+                line_web_open_chat(mid, method=method, debug_url=args.chrome_debug_url)
+                payload = None
+                for attempt in range(2):
+                    payload = line_web_dump(
+                        method=method,
+                        debug_url=args.chrome_debug_url,
+                        scroll_steps=args.scroll_steps,
+                        with_media=args.with_media or args.full_media,
+                        full_media=args.full_media,
+                    )
+                    # A freshly opened chat can render only its newest bubble
+                    # at first; re-dump once if the pane looks that empty.
+                    if len(payload.get("messages") or []) > 1:
+                        break
+                    time.sleep(2.0)
+                payload["chat_name"] = name
+                payload["chat_mid"] = mid
+                with conn:
+                    result = import_web_payload(
+                        conn, payload, owner_name=args.owner_name, force=args.force, media_root=media_root
+                    )
+                result["mid"] = mid
+                result["chat"] = name
+                imported += 1
+            except Exception as exc:
+                result = {"chat": name, "mid": mid, "status": "error", "error": str(exc)}
+                errors += 1
+            results.append(result)
+            if not args.json and result.get("status") == "error":
+                print(f"  error: {result['error']}", file=sys.stderr, flush=True)
+            if position < len(chats):
+                time.sleep(max(0.0, args.delay))
+    finally:
+        if original_mid:
+            try:
+                line_web_open_chat(original_mid, method=method, debug_url=args.chrome_debug_url, settle=0.2)
+            except Exception:
+                pass
+
+    summary = {
+        "ok": errors == 0,
+        "method": method,
+        "chats_seen": len(listing.get("chats") or []),
+        "chats_crawled": imported,
+        "chats_failed": errors,
+        "skipped_unread": skipped_unread,
+        "results": results,
+    }
+    if args.json:
+        print_json(summary)
+    else:
+        print_table(results, ["status", "messages", "media", "chat"])
+        if skipped_unread:
+            names = ", ".join(str(c["name"]) for c in skipped_unread)
+            print(f"\nSkipped {len(skipped_unread)} unread chats (use --include-unread to crawl them): {names}")
+    return 0 if errors == 0 else 1
 
 
 def cmd_web_doctor(args):
@@ -2702,6 +3021,8 @@ def build_parser():
             "  linecrawl --json doctor\n"
             "  linecrawl --json web-doctor\n"
             "  linecrawl --json web-import-current --scroll-steps 5\n"
+            "  linecrawl --json web-chats\n"
+            "  linecrawl --json web-import-all --scroll-steps 5\n"
             "  linecrawl --json messages --chat '%Alex%' --limit 20\n"
             "  linecrawl --json media --limit 10\n\n"
             "Note: --json is a global flag, so put it before the subcommand."
@@ -2840,6 +3161,77 @@ def build_parser():
     p.add_argument("--no-media", dest="with_media", action="store_false", help="Skip image capture.")
     p.add_argument("--full-media", action="store_true", help="Also capture full-resolution images via the in-page viewer (CDP only; briefly opens the photo viewer inside the LINE tab).")
     p.set_defaults(func=cmd_web_import_current, with_media=True)
+
+    p = sub.add_parser(
+        "web-chats",
+        formatter_class=HELP_FORMATTER,
+        help="List every chat in the LINE Web sidebar (name, unread, mid).",
+        description=(
+            "Enumerate all chats visible in the LINE Web chat list, including ones\n"
+            "scrolled out of view. The sidebar is scrolled page by page inside the\n"
+            "LINE tab and its scroll position is restored afterwards. Requires the\n"
+            "CDP or AppleScript route (the AX route cannot run JavaScript)."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl --json web-chats\n"
+            "  linecrawl web-chats --method applescript"
+        ),
+    )
+    p.add_argument("--method", choices=("auto", "cdp", "applescript"), default="auto", help="Chrome control method. Default: auto.")
+    p.add_argument("--chrome-debug-url", default=DEFAULT_CHROME_DEBUG_URL, help=f"Chrome DevTools URL for --method cdp. Default: {DEFAULT_CHROME_DEBUG_URL}.")
+    p.add_argument("--allow-remote-cdp", action="store_true", help="Allow a non-loopback Chrome DevTools URL. Off by default so linecrawl stays local-only.")
+    p.add_argument("--max-scroll-pages", type=int, default=100, help="Safety cap on sidebar scroll pages while enumerating. Default: 100.")
+    p.set_defaults(func=cmd_web_chats)
+
+    p = sub.add_parser(
+        "web-import-all",
+        formatter_class=HELP_FORMATTER,
+        help="Crawl every sidebar chat and import each history.",
+        description=(
+            "Sweep every chat in the LINE Web sidebar instead of only the currently\n"
+            "open one. Chats are opened one by one inside the LINE tab via the\n"
+            "extension's hash router (no OS-level input, no tab switching), each is\n"
+            "dumped with the same scroll/media pipeline as web-import-current, and\n"
+            "the originally open chat is restored at the end.\n\n"
+            "IMPORTANT LIMITATION: LINE Web is end-to-end encrypted and keeps no\n"
+            "local message cache, so a chat's messages exist only in the DOM after\n"
+            "you genuinely open it. Programmatic navigation switches the chat route\n"
+            "but often renders only the newest message, so this reliably captures\n"
+            "deep history only for chats already loaded in the current LINE session.\n"
+            "For full per-person history, open the chat yourself and use\n"
+            "web-import-current, or use LINE Desktop Save Chat. Keep the LINE tab\n"
+            "focused while this runs for the best chance of history loading.\n\n"
+            "Like --full-media, this is an explicit exception to the passive policy:\n"
+            "the LINE tab visibly changes chats while it runs, so avoid running it\n"
+            "while you are actively using the LINE tab. Chats with unread badges are\n"
+            "skipped by default because opening them can send read receipts; opt in\n"
+            "with --include-unread."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  linecrawl --json web-import-all --scroll-steps 5\n"
+            "  linecrawl --json web-import-all --chat 'Family' --scroll-steps 20\n"
+            "  linecrawl --json web-import-all --limit 5 --no-media\n"
+            "  linecrawl --json web-import-all --include-unread\n\n"
+            "Deeper history needs more --scroll-steps per chat; expect roughly one\n"
+            "screenful of older messages per step."
+        ),
+    )
+    p.add_argument("--scroll-steps", type=int, default=5, help="Scroll upward this many viewports per chat while collecting messages. Default: 5.")
+    p.add_argument("--method", choices=("auto", "cdp", "applescript"), default="auto", help="Chrome control method. Default: auto.")
+    p.add_argument("--chrome-debug-url", default=DEFAULT_CHROME_DEBUG_URL, help=f"Chrome DevTools URL for --method cdp. Default: {DEFAULT_CHROME_DEBUG_URL}.")
+    p.add_argument("--allow-remote-cdp", action="store_true", help="Allow a non-loopback Chrome DevTools URL. Off by default so linecrawl stays local-only.")
+    p.add_argument("--owner-name", default="Me", help="Sender name to use for outgoing LINE Web messages.")
+    p.add_argument("--chat", help="Only crawl chats whose name contains this substring (case-insensitive).")
+    p.add_argument("--limit", type=int, help="Crawl at most N chats after filtering.")
+    p.add_argument("--include-unread", action="store_true", help="Also open chats with unread badges. Warning: opening them can send read receipts.")
+    p.add_argument("--delay", type=float, default=1.0, help="Seconds to wait between chats. Default: 1.")
+    p.add_argument("--max-scroll-pages", type=int, default=100, help="Safety cap on sidebar scroll pages while enumerating. Default: 100.")
+    p.add_argument("--force", action="store_true", help="Re-import chats even if their dumps are unchanged.")
+    p.add_argument("--no-media", dest="with_media", action="store_false", help="Skip image capture.")
+    p.add_argument("--full-media", action="store_true", help="Also capture full-resolution images via the in-page viewer (CDP only; briefly opens the photo viewer inside the LINE tab).")
+    p.set_defaults(func=cmd_web_import_all, with_media=True)
 
     p = sub.add_parser(
         "web-watch-current",

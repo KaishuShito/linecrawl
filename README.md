@@ -55,6 +55,7 @@ linecrawl --help
 
 - テキストだけでよい: LINE Desktop の「トークを保存」
 - 画像やスタンプもほしい: Chrome の LINE Web 拡張
+- 全トークの履歴をまとめて取り込みたい: `web-import-all`
 - すでに保存した LINE Web のJSONファイルを使いたい: `web-import-json`
 - LINE の `.edb` ファイルを調べたい: 実験用。ふつうは使いません。
 
@@ -124,6 +125,55 @@ linecrawl --json web-import-current --method cdp --full-media
 ```
 
 `--full-media` は、LINE Web の画像ビューアをページ内で一瞬開いて画像を保存します。ふつうの取り込みでは不要です。
+
+## 全トークをまとめて取り込む
+
+`web-import-current` は「いま開いているトーク」だけを取り込みます。サイドバーの
+全トークを扱いたい場合は `web-chats` と `web-import-all` を使います。
+
+まずサイドバーの全トークを一覧します（取り込みはしません）。これは確実に動きます。
+
+```bash
+linecrawl --json web-chats
+```
+
+すべてのトークを順に開いて取り込みます。
+
+```bash
+linecrawl --json web-import-all --scroll-steps 5
+```
+
+`web-import-all` は LINE Web のハッシュルーター（`#/chats/<id>`）でトークを
+1つずつ切り替えながら取り込み、終わったら元のトークに戻します。OSレベルの
+クリックやタブ切り替えはしませんが、LINE タブの表示は実行中に切り替わるので、
+LINE タブを操作しながらの実行は避けてください。
+
+**重要な制約**: LINE Web はエンドツーエンド暗号化で、メッセージをローカルに
+保存しません（IndexedDB には公開鍵しか無い）。そのため、トークの本文は「実際に
+そのトークを開いて描画された時」だけ DOM に現れます。プログラムからのトーク
+切り替えではルートは変わっても最新1件しか描画されないことが多く、深い履歴を
+確実に取れるのは、いまの LINE セッションですでに開いたことのあるトークだけです。
+特定の相手の全履歴がほしい場合は、そのトークを自分で開いてから
+`web-import-current` を使うか、LINE Desktop の「トークを保存」を使ってください。
+`web-import-all` 実行中は LINE タブをフォアグラウンドにしておくと、履歴が
+読み込まれる可能性が上がります。
+
+未読バッジのあるトークは、開くと相手に既読が付く可能性があるため、標準では
+スキップして報告だけします。既読が付いてよければ opt-in します。
+
+```bash
+linecrawl --json web-import-all --include-unread
+```
+
+よく使うオプション:
+
+```bash
+linecrawl --json web-import-all --chat 'Family' --scroll-steps 20  # 名前で絞る
+linecrawl --json web-import-all --limit 5 --no-media               # まず小さく試す
+```
+
+`--scroll-steps` はトークごとに何画面ぶん過去へ遡るかです。深い履歴が
+ほしいトークは `--chat` で絞って大きめの値を指定するのが速いです。
 
 ## 最近の内容を取り込む
 
@@ -235,7 +285,7 @@ AppleScript を使う場合は、Chrome でこれを有効にします。
 Chrome > View > Developer > Allow JavaScript from Apple Events
 ```
 
-ふつうの LINE Web 取り込みでは、OS のマウス移動、キーボード入力、タブ切り替え、ウィンドウ移動はしません。
+ふつうの LINE Web 取り込みでは、OS のマウス移動、キーボード入力、タブ切り替え、ウィンドウ移動はしません。例外は2つだけで、どちらもページ内 JavaScript で完結します: `--full-media`（画像ビューアを一瞬開く）と `web-import-all`（トークを順に切り替えて最後に元へ戻す）。
 
 ## 画像・スタンプ
 
